@@ -50,14 +50,6 @@ STYLE_GUIDES = {
     ),
 }
 
-CSS = """
-.gradio-container {max-width: 1440px !important; margin: 0 auto !important;}
-#vf-hero {padding: 22px 24px; border: 1px solid var(--border-color-primary); border-radius: 18px; margin-bottom: 12px;}
-#vf-hero h1 {letter-spacing: -0.04em; margin-bottom: 4px;}
-.vf-muted {opacity: 0.78;}
-"""
-
-
 def _slug(text: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", text.strip().lower()).strip("-")
     return (slug[:48] or "untitled-concept")
@@ -352,106 +344,281 @@ def configuration_status() -> str:
     )
 
 
-with gr.Blocks(title="VisionForge AI · Concept Studio", css=CSS) as demo:
+
+def _selected_priorities(
+    form_factor: list[str] | None,
+    usability: list[str] | None,
+    lifecycle: list[str] | None,
+    engineering: list[str] | None,
+) -> list[str]:
+    """Combine categorized priority controls into one consistent metadata list."""
+    result: list[str] = []
+    for group in (form_factor, usability, lifecycle, engineering):
+        for choice in group or []:
+            if choice not in result:
+                result.append(choice)
+    return result
+
+
+def _combine_constraints(required: str, envelope: str, avoid: str) -> str:
+    """Keep must-haves, size/interfaces, and exclusions distinct in the prompt."""
+    sections = []
+    if (required or '').strip():
+        sections.append(f"Required features: {(required or '').strip()}")
+    if (envelope or '').strip():
+        sections.append(f"Dimensions / interfaces: {(envelope or '').strip()}")
+    if (avoid or '').strip():
+        sections.append(f"Avoid / additional notes: {(avoid or '').strip()}")
+    return "\n".join(sections)
+
+
+def preview_prompt_ui(
+    sketch_path: str | None,
+    name: str,
+    description: str,
+    form_factor: list[str] | None,
+    usability: list[str] | None,
+    lifecycle: list[str] | None,
+    engineering: list[str] | None,
+    required: str,
+    envelope: str,
+    avoid: str,
+    render_style: str,
+    generation_mode: str,
+) -> str:
+    """Show users the exact structured prompt before spending provider credits."""
+    if not (description or '').strip():
+        return "Add a product description in **02 / Design brief** to preview the prompt."
+    guided = generation_mode == GUIDED_MODE
+    if guided and not sketch_path:
+        return "Upload a sketch in **01 / Sketch** or choose **Prompt-only fallback** in this tab."
+    return build_prompt(
+        name,
+        description,
+        _selected_priorities(form_factor, usability, lifecycle, engineering),
+        _combine_constraints(required, envelope, avoid),
+        render_style,
+        guided,
+    )
+
+
+def generate_from_studio(
+    sketch_path: str | None,
+    name: str,
+    description: str,
+    form_factor: list[str] | None,
+    usability: list[str] | None,
+    lifecycle: list[str] | None,
+    engineering: list[str] | None,
+    required: str,
+    envelope: str,
+    avoid: str,
+    render_style: str,
+    generation_mode: str,
+    profile: str,
+):
+    """Adapt grouped UI controls to the core generation pipeline."""
+    return generate_concept(
+        sketch_path,
+        name,
+        description,
+        _selected_priorities(form_factor, usability, lifecycle, engineering),
+        _combine_constraints(required, envelope, avoid),
+        render_style,
+        generation_mode,
+        profile,
+    )
+
+
+CSS = """
+.gradio-container {max-width: 1480px !important; margin: 0 auto !important; padding-bottom: 36px !important;}
+#vf-hero {padding: 26px 28px; border: 1px solid var(--border-color-primary); border-radius: 20px; margin: 6px 0 16px; background: linear-gradient(120deg, var(--block-background-fill), var(--background-fill-secondary));}
+#vf-hero h1 {letter-spacing: -0.045em; margin: 0 0 8px; font-size: clamp(2rem, 3vw, 3rem);}
+#vf-kicker {font-size: .76rem; letter-spacing: .16em; font-weight: 800; opacity: .72; margin-bottom: 8px;}
+#vf-lead {font-size: 1rem; line-height: 1.65; max-width: 900px; opacity: .84;}
+#vf-workflow {display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; margin: 12px 0 22px;}
+.vf-step {padding: 12px 14px; border-radius: 14px; border: 1px solid var(--border-color-primary); background: var(--block-background-fill); min-height: 72px;}
+.vf-step-num {font-size: .73rem; letter-spacing: .12em; opacity: .7; font-weight: 800;}
+.vf-step-title {font-weight: 750; margin-top: 4px;}
+.vf-step-note {font-size: .78rem; opacity: .72; margin-top: 2px;}
+.vf-section-note {opacity: .78; line-height: 1.55; max-width: 900px;}
+.vf-footnote {font-size: .82rem; opacity: .75; line-height: 1.55;}
+.vf-result {border: 1px solid var(--border-color-primary); border-radius: 16px; padding: 14px;}
+button[role="tab"] {border-radius: 10px !important; font-weight: 650 !important;}
+button.primary {font-weight: 750 !important;}
+footer {display: none !important;}
+@media (max-width: 760px) {.gradio-container {padding: 10px !important;} #vf-hero {padding: 18px;} #vf-workflow {grid-template-columns: repeat(2,minmax(0,1fr));}}
+"""
+
+with gr.Blocks(title="VisionForge AI · Concept Studio") as demo:
     gr.Markdown(
         """<div id="vf-hero">
+<div id="vf-kicker">HARDWARE CONCEPT LAB / V 0.2</div>
 # ◈ VisionForge AI
-**SKETCH → PROCESS → CONCEPT**
-
-Turn a rough hardware sketch and a design brief into a polished visual concept. Inspect image preprocessing, keep constraints attached to the result, and export a review-ready bundle.
+<div id="vf-lead">Turn a rough engineering sketch into a structured product concept. Work through a guided flow, inspect how the image is prepared, set clear design constraints, then export a review-ready concept package.</div>
+</div>
+<div id="vf-workflow">
+  <div class="vf-step"><div class="vf-step-num">STEP 01</div><div class="vf-step-title">Sketch</div><div class="vf-step-note">Upload and inspect source</div></div>
+  <div class="vf-step"><div class="vf-step-num">STEP 02</div><div class="vf-step-title">Design brief</div><div class="vf-step-note">Define goals and limits</div></div>
+  <div class="vf-step"><div class="vf-step-num">STEP 03</div><div class="vf-step-title">Configure</div><div class="vf-step-note">Review prompt and generate</div></div>
+  <div class="vf-step"><div class="vf-step-num">STEP 04</div><div class="vf-step-title">Results</div><div class="vf-step-note">Review and export concept</div></div>
 </div>"""
     )
 
     with gr.Tabs():
-        with gr.Tab("Concept studio"):
+        with gr.Tab("01 · Sketch"):
+            gr.Markdown("## Start with your reference\nUpload a photo, scan, or digital sketch. VisionForge prepares a clean reference image and displays an edge map before generation.")
             with gr.Row(equal_height=False):
-                with gr.Column(scale=5, min_width=320):
-                    gr.Markdown("### 01 / Sketch input")
+                with gr.Column(scale=5, min_width=300):
                     sketch = gr.Image(
                         label="Engineering sketch",
                         type="filepath",
                         sources=["upload", "clipboard"],
+                        height=340,
                     )
                     profile = gr.Dropdown(
-                        label="Preprocessing profile",
+                        label="Processing profile",
                         choices=list(PROFILES),
                         value="Clean sketch",
-                        info="Changes affect the reference image used for sketch-guided generation.",
+                        info="Choose how linework is cleaned before preview and sketch-guided generation.",
                     )
-                    with gr.Accordion("Inspect image processing", open=True):
-                        with gr.Row():
-                            processed_preview = gr.Image(label="Prepared sketch", interactive=False, height=210)
-                            edges_preview = gr.Image(label="Edge map", interactive=False, height=210)
-                        analysis_report = gr.Markdown("Upload a sketch to inspect preprocessing and linework.")
+                    gr.Markdown("<div class='vf-footnote'>Accepted image files: PNG, JPG/JPEG, or WEBP. Maximum upload size: 20 MB.</div>")
+                with gr.Column(scale=6, min_width=300):
+                    with gr.Row():
+                        processed_preview = gr.Image(label="Prepared reference", interactive=False, height=265)
+                        edges_preview = gr.Image(label="Edge map", interactive=False, height=265)
+                    analysis_report = gr.Markdown("Upload a sketch to begin image diagnostics.")
+                    with gr.Accordion("What processing does", open=False):
+                        gr.Markdown("""- Applies image orientation metadata.
+- Rejects files that are not valid images or are too large to handle safely.
+- Scales the longest edge to at most 1024 px.
+- Applies the selected cleanup profile and creates a visible edge map.
 
-                    gr.Markdown("### 02 / Product brief")
-                    name = gr.Textbox(label="Product name", placeholder="e.g. Pocket-sized music player", max_lines=1)
+These checks describe the image only; they do not judge whether the engineering design is correct.""")
+            gr.Markdown("**Next:** Open **02 · Design brief** and describe what the product needs to do.")
+
+        with gr.Tab("02 · Design brief"):
+            gr.Markdown("## Define the product\nBe concrete. State what the product does, who uses it, and which features must remain present.")
+            with gr.Row(equal_height=False):
+                with gr.Column(scale=5, min_width=280):
+                    name = gr.Textbox(label="Project / product name", placeholder="e.g. Pocket-sized music player", max_lines=1)
                     description = gr.Textbox(
-                        label="What are you designing?",
-                        placeholder="Describe the purpose, user, and main functions.",
-                        lines=4,
+                        label="Product purpose and main functions",
+                        placeholder="What is it? Who is it for? What should it do?",
+                        lines=6,
                     )
-                    priorities = gr.CheckboxGroup(
-                        label="Design priorities",
-                        choices=[
-                            "Compact", "Low cost", "Easy to repair", "Accessible controls",
-                            "Low power", "Modular", "Portable", "Durable", "Minimal parts",
-                        ],
-                    )
-                    constraints = gr.Textbox(
-                        label="Hard constraints / required features",
-                        placeholder="e.g. USB-C, physical buttons, replaceable microSD, 100 × 45 mm envelope",
+                    gr.Markdown("<div class='vf-footnote'>Tip: describe function before appearance. The model will use your visual style settings in the next step.</div>")
+                with gr.Column(scale=6, min_width=300):
+                    gr.Markdown("### Design priorities\nChoose the goals that matter most. Leaving a group blank is fine.")
+                    with gr.Row():
+                        with gr.Column():
+                            with gr.Group():
+                                gr.Markdown("**Form factor & mobility**")
+                                form_factor = gr.CheckboxGroup(
+                                    choices=["Compact", "Portable"],
+                                    label="Size and movement",
+                                )
+                            with gr.Group():
+                                gr.Markdown("**Usability**")
+                                usability = gr.CheckboxGroup(
+                                    choices=["Accessible controls", "Minimal parts"],
+                                    label="Interaction and simplicity",
+                                )
+                        with gr.Column():
+                            with gr.Group():
+                                gr.Markdown("**Reliability & lifecycle**")
+                                lifecycle = gr.CheckboxGroup(
+                                    choices=["Durable", "Easy to repair", "Modular"],
+                                    label="Long-term ownership",
+                                )
+                            with gr.Group():
+                                gr.Markdown("**Engineering goals**")
+                                engineering = gr.CheckboxGroup(
+                                    choices=["Low power", "Low cost"],
+                                    label="Practical constraints",
+                                )
+            with gr.Accordion("Required features and constraints", open=True):
+                gr.Markdown("Separate must-have features from physical limits and things the concept should avoid.")
+                with gr.Row(equal_height=False):
+                    required = gr.Textbox(
+                        label="Must-have features",
+                        placeholder="USB-C, physical buttons, replaceable microSD card",
                         lines=3,
                     )
+                    envelope = gr.Textbox(
+                        label="Dimensions / interfaces",
+                        placeholder="Approx. 100 × 45 mm, side-mounted headphone jack",
+                        lines=3,
+                    )
+                    avoid = gr.Textbox(
+                        label="Avoid / extra notes",
+                        placeholder="No touchscreen, no glued-shut enclosure",
+                        lines=3,
+                    )
+            gr.Markdown("**Next:** Open **03 · Configure** to choose the render style and review the prompt.")
+
+        with gr.Tab("03 · Configure & generate"):
+            gr.Markdown("## Configure the generation\nReview the prompt before sending a request to the configured inference provider. Provider access and quotas may apply.")
+            with gr.Row(equal_height=False):
+                with gr.Column(scale=5, min_width=300):
                     render_style = gr.Dropdown(
                         label="Visualization style",
                         choices=list(STYLE_GUIDES),
                         value="Studio product render",
                     )
                     generation_mode = gr.Radio(
-                        label="Generation mode",
+                        label="Reference mode",
                         choices=[GUIDED_MODE, PROMPT_MODE],
                         value=GUIDED_MODE,
-                        info="Sketch-guided mode sends the processed image to an image-to-image model. Prompt-only is a fallback.",
+                        info="Sketch-guided sends the prepared sketch to image-to-image. Prompt-only generates from text and does not use the sketch as a model input.",
                     )
-                    generate_button = gr.Button("Generate concept", variant="primary", size="lg")
+                    prompt_preview = gr.Textbox(
+                        label="Prompt preview",
+                        value="Complete the design brief to preview the prompt.",
+                        lines=13,
+                        interactive=False,
+                    )
+                    refresh_prompt = gr.Button("Refresh prompt preview", variant="secondary")
+                with gr.Column(scale=5, min_width=300):
+                    gr.Markdown("### Ready to generate?\nCheck your sketch, required features, and selected mode. You can revise any earlier tab before making a request.")
+                    generate_button = gr.Button("Generate product concept", variant="primary", size="lg")
+                    generation_status = gr.Markdown("Your generation status will appear here.")
+                    quick_preview = gr.Image(label="Latest concept preview", interactive=False, height=350)
+                    gr.Markdown("<div class='vf-footnote'>The generated render is a visual concept only. It is not validated CAD, a circuit schematic, a bill of materials, or a manufacturing-ready design.</div>")
 
-                with gr.Column(scale=6, min_width=360):
-                    gr.Markdown("### 03 / Generated concept")
-                    result_image = gr.Image(label="Concept render", interactive=False, height=460)
-                    status = gr.Markdown("Complete the product brief and generate a concept.")
-                    download_bundle = gr.File(label="Download concept package (.zip)")
+        with gr.Tab("04 · Results & export"):
+            gr.Markdown("## Review your concept\nCompare it against your starting sketch and constraints. Export the image and metadata to continue your project outside VisionForge.")
+            with gr.Row(equal_height=False):
+                with gr.Column(scale=6, min_width=320):
+                    result_image = gr.Image(label="Generated product concept", interactive=False, height=540)
+                    download_bundle = gr.File(label="Concept package (.zip)")
+                with gr.Column(scale=5, min_width=300):
+                    status = gr.Markdown("Generate a concept in **03 · Configure & generate** to see its report here.")
                     with gr.Accordion("Concept brief and engineering review", open=True):
-                        brief = gr.Markdown("The generated design brief will appear here.")
+                        brief = gr.Markdown("The design record will appear here after generation.")
 
-            gr.Markdown("### Recent concepts")
-            history = gr.Gallery(label="Previous local generations", columns=3, height=320)
+        with gr.Tab("05 · Project library"):
+            gr.Markdown("## Recent local concepts\nEach completed run is stored under `outputs/runs/` on this computer. Refresh the view to reload recent saved images.")
+            refresh_history = gr.Button("Refresh library", variant="secondary")
+            history = gr.Gallery(label="Saved concepts", columns=3, height=470, object_fit="contain")
+            gr.Markdown("<div class='vf-footnote'>The library is stored locally. It is not a cloud project manager, and concepts are not uploaded anywhere by this gallery.</div>")
 
-        with gr.Tab("Runtime & limitations"):
-            gr.Markdown(
-                """### Runtime configuration
-
-The app reads `HF_TOKEN` from the local `.env` file. It does not show the token or include it in exports.
-The default provider is `fal-ai`; sketch-guided and prompt-only generation use separate configurable model IDs.
-
-### Image-processing pipeline
-
-1. Validate file size, image dimensions, and minimum resolution.
-2. Apply EXIF orientation and resize to a maximum longest edge of 1024 px.
-3. Apply the selected Pillow-only cleanup profile.
-4. Create an edge map and report image dimensions, grayscale contrast, and estimated edge density.
-5. In sketch-guided mode, send the processed sketch and structured prompt to the image-to-image endpoint.
-6. Save the image, prompt, metadata, diagnostics, review checklist, and a ZIP bundle for each run.
-
-### Important limits
-
-Image diagnostics are basic pixel measurements, not AI engineering review. The generator may alter proportions, omit features, or invent internals. A generated render is **not** CAD, a circuit schematic, validated dimensions, a bill of materials, or a manufacturing plan. Review all engineering details independently. Model/provider access, quotas, and pricing depend on the configured service.
-"""
-            )
+        with gr.Tab("System & limits"):
+            gr.Markdown("## Runtime and process notes")
             config = gr.Markdown(configuration_status())
             refresh_config = gr.Button("Refresh local configuration check")
             refresh_config.click(fn=configuration_status, outputs=config)
+            with gr.Accordion("Image processing pipeline", open=False):
+                gr.Markdown("""1. Validate file size, image dimensions, and minimum resolution.
+2. Apply EXIF orientation and resize to a maximum longest edge of 1024 px.
+3. Apply the selected Pillow-only cleanup profile.
+4. Create an edge map and report basic image measurements.
+5. In sketch-guided mode, send the processed image and structured prompt to the configured image-to-image endpoint.
+6. Save the generated image, prompt, metadata, diagnostics, review checklist, and a ZIP bundle for each run.""")
+            with gr.Accordion("Important limitations", open=True):
+                gr.Markdown("""Image diagnostics are basic pixel measurements, not an AI engineering review. The generator may alter proportions, omit features, or invent internals. A generated render is **not** CAD, a circuit schematic, validated dimensions, a bill of materials, a safety assessment, or a manufacturing plan. Review all engineering details independently. Provider access, quotas, and pricing depend on the configured service.""")
 
+    # Keep image diagnostics responsive no matter which tab currently contains the controls.
     sketch.change(
         fn=preview_processing,
         inputs=[sketch, profile],
@@ -462,17 +629,31 @@ Image diagnostics are basic pixel measurements, not AI engineering review. The g
         inputs=[sketch, profile],
         outputs=[processed_preview, edges_preview, analysis_report],
     )
+
+    prompt_inputs = [
+        sketch, name, description, form_factor, usability, lifecycle, engineering,
+        required, envelope, avoid, render_style, generation_mode,
+    ]
+    refresh_prompt.click(fn=preview_prompt_ui, inputs=prompt_inputs, outputs=prompt_preview)
+    for component in [name, description, form_factor, usability, lifecycle, engineering, required, envelope, avoid, render_style, generation_mode, sketch]:
+        component.change(fn=preview_prompt_ui, inputs=prompt_inputs, outputs=prompt_preview)
+
     generate_button.click(
-        fn=generate_concept,
-        inputs=[sketch, name, description, priorities, constraints, render_style, generation_mode, profile],
-        outputs=[result_image, status, brief, download_bundle, history],
+        fn=generate_from_studio,
+        inputs=[
+            sketch, name, description, form_factor, usability, lifecycle, engineering,
+            required, envelope, avoid, render_style, generation_mode, profile,
+        ],
+        outputs=[result_image, status, brief, download_bundle, history, quick_preview, generation_status],
     )
+    refresh_history.click(fn=load_history, outputs=history)
     demo.load(fn=load_history, outputs=history)
 
 
 if __name__ == "__main__":
     demo.queue(max_size=6).launch(
         theme=gr.themes.Soft(),
+        css=CSS,
         server_name=os.getenv("GRADIO_SERVER_NAME", "127.0.0.1"),
         server_port=int(os.getenv("PORT", "7860")),
         show_error=True,

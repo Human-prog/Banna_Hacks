@@ -6,6 +6,10 @@ VisionForge prepares and measures the uploaded sketch, combines it with a struct
 
 ## Current features
 
+- **Guided multi-tab workflow:** separate Sketch, Design brief, Configure & generate, Results & export, Project library, and System & limits tabs.
+- **Categorized design priorities:** form factor, usability, reliability/lifecycle, and engineering goals are grouped instead of presented as one long checkbox list.
+- **Prompt preview:** inspect the assembled generation prompt before sending a model request.
+- **Live result feedback:** the generation status and a quick image preview stay visible on the configuration tab, with full exports in Results.
 - **Sketch preprocessing:** orientation correction, file-size and dimension checks, 1024 px maximum edge, line cleanup, and a high-contrast profile.
 - **Image diagnostics:** original/prepared dimensions, file size, grayscale contrast, and estimated edge density.
 - **Sketch-guided generation:** uses an image-to-image model with the prepared sketch as the reference image.
@@ -68,7 +72,7 @@ AI outputs are **visual concepts only**. They are not validated CAD, an electric
 ## Suggested next improvements
 
 - Multi-variant generation with consistent prompt/settings records.
-- Side-by-side original / processed / output comparison.
+- Side-by-side original / processed / output comparison with synchronized zoom.
 - User-adjustable target aspect ratio and image-to-image strength, once supported reliably by the selected provider.
 - Optional structured design report with a human verification checklist.
 - A deployed demo with a carefully managed secret and request limits.
