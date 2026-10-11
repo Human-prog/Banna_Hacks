@@ -21,6 +21,11 @@ try:
 except ImportError:  # support both `python app/main.py` and `python -m app.main`
     from processing import PROFILES, PreparedSketch, prepare_sketch
 
+try:
+    from .variants import add_variant_direction, create_comparison_sheet, create_variant_bundle
+except ImportError:  # support both `python app/main.py` and `python -m app.main`
+    from variants import add_variant_direction, create_comparison_sheet, create_variant_bundle
+
 BASE_DIR = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = BASE_DIR / "outputs"
 RUNS_DIR = OUTPUT_DIR / "runs"
@@ -163,6 +168,7 @@ def _render_brief(metadata: dict[str, Any]) -> str:
 {metadata['constraints'] or 'No additional constraints provided.'}
 
 ## Visualization settings
+- **Variant:** {metadata.get('variant_index', 1)} — {metadata.get('variant_title', 'Single concept')}
 - **Mode:** {metadata['generation_mode']}
 - **Style:** {metadata['render_style']}
 - **Model:** `{metadata['model']}`
@@ -241,6 +247,7 @@ def generate_concept(
     render_style: str,
     generation_mode: str,
     profile: str,
+    variant_index: int = 1,
 ) -> tuple[str | None, str, str, str | None, list[tuple[str, str]]]:
     description = (description or "").strip()
     if not description:
@@ -263,6 +270,10 @@ def generate_concept(
 
     product_name = (name or "Untitled concept").strip()[:120] or "Untitled concept"
     prompt = build_prompt(product_name, description, priorities, constraints or "", render_style, is_guided)
+    try:
+        prompt, variant_title = add_variant_direction(prompt, int(variant_index))
+    except (TypeError, ValueError) as exc:
+        raise gr.Error("Choose 1, 2, or 3 concept variants.") from exc
     model = EDIT_MODEL if is_guided else TEXT_MODEL
 
     try:
@@ -299,6 +310,8 @@ def generate_concept(
     metadata: dict[str, Any] = {
         "product_name": product_name,
         "description": description,
+        "variant_index": int(variant_index),
+        "variant_title": variant_title,
         "priorities": priorities or [],
         "constraints": (constraints or "").strip(),
         "render_style": render_style,
@@ -317,7 +330,7 @@ def generate_concept(
         mode_text = "Sketch-guided image-to-image: the processed sketch was sent as the reference image."
     else:
         mode_text = "Prompt-only text-to-image: the generated image was not conditioned on the uploaded sketch."
-    status = f"""### Concept generated successfully
+    status = f"""### Variant {variant_index} generated successfully · {variant_title}
 
 - **Model:** `{model}`
 - **Provider:** `{PROVIDER}`
@@ -385,14 +398,15 @@ def preview_prompt_ui(
     avoid: str,
     render_style: str,
     generation_mode: str,
+    variant_count: int = 2,
 ) -> str:
-    """Show users the exact structured prompt before spending provider credits."""
+    """Show the shared prompt plus variant-specific directions before inference."""
     if not (description or '').strip():
         return "Add a product description in **02 / Design brief** to preview the prompt."
     guided = generation_mode == GUIDED_MODE
     if guided and not sketch_path:
         return "Upload a sketch in **01 / Sketch** or choose **Prompt-only fallback** in this tab."
-    return build_prompt(
+    base_prompt = build_prompt(
         name,
         description,
         _selected_priorities(form_factor, usability, lifecycle, engineering),
@@ -400,6 +414,16 @@ def preview_prompt_ui(
         render_style,
         guided,
     )
+    try:
+        count = max(1, min(3, int(variant_count)))
+    except (TypeError, ValueError):
+        count = 1
+    directions = []
+    for index in range(1, count + 1):
+        title, direction = add_variant_direction("", index)
+        # Show only the appended direction so the preview remains readable.
+        directions.append(f"{index}. **{title}:** {direction}")
+    return base_prompt + "\n\n---\nVARIANT-SPECIFIC INSTRUCTIONS\n" + "\n".join(directions)
 
 
 def generate_from_studio(
@@ -416,17 +440,82 @@ def generate_from_studio(
     render_style: str,
     generation_mode: str,
     profile: str,
+    variant_count: int = 2,
 ):
-    """Adapt grouped UI controls to the core generation pipeline."""
-    return generate_concept(
-        sketch_path,
-        name,
-        description,
-        _selected_priorities(form_factor, usability, lifecycle, engineering),
-        _combine_constraints(required, envelope, avoid),
-        render_style,
-        generation_mode,
-        profile,
+    """Generate 1–3 concepts, then return comparison and consolidated export artifacts."""
+    try:
+        count = int(variant_count)
+    except (TypeError, ValueError) as exc:
+        raise gr.Error("Choose between one and three variants.") from exc
+    if count < 1 or count > 3:
+        raise gr.Error("Choose between one and three variants.")
+
+    product_name = (name or "Untitled concept").strip()[:120] or "Untitled concept"
+    all_priorities = _selected_priorities(form_factor, usability, lifecycle, engineering)
+    all_constraints = _combine_constraints(required, envelope, avoid)
+    records: list[dict[str, str]] = []
+    errors: list[str] = []
+
+    for variant_index in range(1, count + 1):
+        try:
+            image_path, one_status, one_brief, _one_bundle, _history = generate_concept(
+                sketch_path, name, description, all_priorities, all_constraints,
+                render_style, generation_mode, profile, variant_index=variant_index,
+            )
+            if not image_path:
+                raise RuntimeError("The provider did not return an image path.")
+            title, _direction = add_variant_direction("", variant_index)
+            records.append({
+                "image_path": image_path,
+                "title": title,
+                "brief": one_brief,
+                "status": one_status,
+            })
+        except Exception as exc:
+            message = str(exc)
+            secret = os.getenv("HF_TOKEN", "").strip()
+            if secret:
+                message = message.replace(secret, "[redacted token]")
+            errors.append(f"Variant {variant_index}: {message}")
+            # An auth/quota/model failure is unlikely to improve by repeating more calls.
+            break
+
+    if not records:
+        detail = errors[0] if errors else "No variants were generated."
+        raise gr.Error(detail)
+
+    image_paths = [record["image_path"] for record in records]
+    labels = [record["title"] for record in records]
+    stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    export_dir = OUTPUT_DIR / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    sheet_path = create_comparison_sheet(
+        image_paths, labels, export_dir / f"{stamp}_{_slug(product_name)}_comparison.png"
+    )
+    bundle_path = create_variant_bundle(
+        product_name, image_paths, labels, sheet_path,
+        export_dir / f"{stamp}_{_slug(product_name)}_variants.zip",
+    )
+
+    successful = len(records)
+    overall = f"### {successful} of {count} concept variant(s) generated\n\n"
+    overall += f"- **Product:** {product_name}\n- **Provider calls completed:** {successful}\n"
+    overall += f"- **Comparison sheet:** `outputs/exports/{sheet_path.name}`\n"
+    overall += f"- **Consolidated package:** `outputs/exports/{bundle_path.name}`\n\n"
+    overall += "Variants share the same brief and constraints but use distinct visual exploration directions. "
+    overall += "Review every render manually; visual differences do not establish engineering correctness."
+    if errors:
+        overall += "\n\n#### Partial generation note\n" + "\n".join(f"- {item[:700]}" for item in errors)
+
+    combined_brief = "# Variant review\n\n" + "\n\n---\n\n".join(
+        f"## Variant {idx}: {record['title']}\n\n{record['brief']}"
+        for idx, record in enumerate(records, start=1)
+    )
+    gallery = [(record["image_path"], f"{idx:02d} · {record['title']}") for idx, record in enumerate(records, start=1)]
+    short_status = f"Generated {successful}/{count} variant(s). Compare the gallery and contact sheet before choosing a direction."
+    return (
+        image_paths[0], overall, combined_brief, str(bundle_path), load_history(),
+        image_paths[0], short_status, gallery, str(sheet_path),
     )
 
 
@@ -453,7 +542,7 @@ footer {display: none !important;}
 with gr.Blocks(title="VisionForge AI · Concept Studio") as demo:
     gr.Markdown(
         """<div id="vf-hero">
-<div id="vf-kicker">HARDWARE CONCEPT LAB / V 0.2</div>
+<div id="vf-kicker">HARDWARE CONCEPT LAB / V 0.3</div>
 # ◈ VisionForge AI
 <div id="vf-lead">Turn a rough engineering sketch into a structured product concept. Work through a guided flow, inspect how the image is prepared, set clear design constraints, then export a review-ready concept package.</div>
 </div>
@@ -572,8 +661,13 @@ These checks describe the image only; they do not judge whether the engineering 
                         value=GUIDED_MODE,
                         info="Sketch-guided sends the prepared sketch to image-to-image. Prompt-only generates from text and does not use the sketch as a model input.",
                     )
+                    variant_count = gr.Slider(
+                        label="Concept variants",
+                        minimum=1, maximum=3, step=1, value=2,
+                        info="Each variant makes a separate hosted inference request. Choose 1 to conserve quota, or 2–3 to compare distinct visual directions.",
+                    )
                     prompt_preview = gr.Textbox(
-                        label="Prompt preview",
+                        label="Shared prompt + variant directions",
                         value="Complete the design brief to preview the prompt.",
                         lines=13,
                         interactive=False,
@@ -587,11 +681,13 @@ These checks describe the image only; they do not judge whether the engineering 
                     gr.Markdown("<div class='vf-footnote'>The generated render is a visual concept only. It is not validated CAD, a circuit schematic, a bill of materials, or a manufacturing-ready design.</div>")
 
         with gr.Tab("04 · Results & export"):
-            gr.Markdown("## Review your concept\nCompare it against your starting sketch and constraints. Export the image and metadata to continue your project outside VisionForge.")
+            gr.Markdown("## Review your concepts\nCompare the generated directions in the gallery and contact sheet. Each variant uses a separate model request; the consolidated ZIP includes concept images, per-variant briefs/metadata, and a comparison sheet.")
             with gr.Row(equal_height=False):
                 with gr.Column(scale=6, min_width=320):
-                    result_image = gr.Image(label="Generated product concept", interactive=False, height=540)
-                    download_bundle = gr.File(label="Concept package (.zip)")
+                    result_image = gr.Image(label="Selected / first concept", interactive=False, height=440)
+                    variant_gallery = gr.Gallery(label="Generated variants", columns=3, height=300, object_fit="contain")
+                    comparison_sheet = gr.Image(label="Side-by-side comparison sheet", interactive=False, height=360)
+                    download_bundle = gr.File(label="All variants package (.zip)")
                 with gr.Column(scale=5, min_width=300):
                     status = gr.Markdown("Generate a concept in **03 · Configure & generate** to see its report here.")
                     with gr.Accordion("Concept brief and engineering review", open=True):
@@ -614,7 +710,8 @@ These checks describe the image only; they do not judge whether the engineering 
 3. Apply the selected Pillow-only cleanup profile.
 4. Create an edge map and report basic image measurements.
 5. In sketch-guided mode, send the processed image and structured prompt to the configured image-to-image endpoint.
-6. Save the generated image, prompt, metadata, diagnostics, review checklist, and a ZIP bundle for each run.""")
+6. Optionally generate 1–3 variants using distinct prompt directions. Each variant is a separate hosted inference request.
+7. Create a side-by-side contact sheet and consolidated ZIP containing variants, metadata, briefs, and diagnostics.""")
             with gr.Accordion("Important limitations", open=True):
                 gr.Markdown("""Image diagnostics are basic pixel measurements, not an AI engineering review. The generator may alter proportions, omit features, or invent internals. A generated render is **not** CAD, a circuit schematic, validated dimensions, a bill of materials, a safety assessment, or a manufacturing plan. Review all engineering details independently. Provider access, quotas, and pricing depend on the configured service.""")
 
@@ -632,19 +729,19 @@ These checks describe the image only; they do not judge whether the engineering 
 
     prompt_inputs = [
         sketch, name, description, form_factor, usability, lifecycle, engineering,
-        required, envelope, avoid, render_style, generation_mode,
+        required, envelope, avoid, render_style, generation_mode, variant_count,
     ]
     refresh_prompt.click(fn=preview_prompt_ui, inputs=prompt_inputs, outputs=prompt_preview)
-    for component in [name, description, form_factor, usability, lifecycle, engineering, required, envelope, avoid, render_style, generation_mode, sketch]:
+    for component in [name, description, form_factor, usability, lifecycle, engineering, required, envelope, avoid, render_style, generation_mode, sketch, variant_count]:
         component.change(fn=preview_prompt_ui, inputs=prompt_inputs, outputs=prompt_preview)
 
     generate_button.click(
         fn=generate_from_studio,
         inputs=[
             sketch, name, description, form_factor, usability, lifecycle, engineering,
-            required, envelope, avoid, render_style, generation_mode, profile,
+            required, envelope, avoid, render_style, generation_mode, profile, variant_count,
         ],
-        outputs=[result_image, status, brief, download_bundle, history, quick_preview, generation_status],
+        outputs=[result_image, status, brief, download_bundle, history, quick_preview, generation_status, variant_gallery, comparison_sheet],
     )
     refresh_history.click(fn=load_history, outputs=history)
     demo.load(fn=load_history, outputs=history)

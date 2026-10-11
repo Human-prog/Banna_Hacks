@@ -1,25 +1,25 @@
 # VisionForge AI
 
-**Sketch → Process → Concept** — an AI-assisted product-concept studio for rough hardware and electronics sketches.
+**Sketch → Process → Explore → Compare** — an AI-assisted product-concept studio for rough hardware and electronics sketches.
 
-VisionForge prepares and measures the uploaded sketch, combines it with a structured design brief, generates a visual concept, and exports a review package. Its goal is to help communicate and iterate on early ideas, not to replace engineering validation.
+VisionForge helps turn an early sketch and a structured written brief into several visual concept directions. It prepares and measures the reference image, sends the selected reference mode and prompt to a hosted image model, and saves a review package for each generated concept. It is intended for early visual exploration, not engineering verification.
 
-## Current features
+## Features
 
-- **Guided multi-tab workflow:** separate Sketch, Design brief, Configure & generate, Results & export, Project library, and System & limits tabs.
-- **Categorized design priorities:** form factor, usability, reliability/lifecycle, and engineering goals are grouped instead of presented as one long checkbox list.
-- **Prompt preview:** inspect the assembled generation prompt before sending a model request.
-- **Live result feedback:** the generation status and a quick image preview stay visible on the configuration tab, with full exports in Results.
-- **Sketch preprocessing:** orientation correction, file-size and dimension checks, 1024 px maximum edge, line cleanup, and a high-contrast profile.
-- **Image diagnostics:** original/prepared dimensions, file size, grayscale contrast, and estimated edge density.
-- **Sketch-guided generation:** uses an image-to-image model with the prepared sketch as the reference image.
-- **Prompt-only fallback:** generates from the written brief when you do not have a sketch or the edit model is unavailable.
-- **Prompt builder:** includes the product purpose, design priorities, constraints, and render style.
-- **Exportable records:** generated PNG, processed reference image, edge map, Markdown brief, JSON metadata, and a ZIP bundle.
-- **Local history:** recent concepts are saved in `outputs/runs/` and shown in the gallery.
-- **Offline tests for preprocessing:** test the sketch processor without making a paid/remote model request.
+- **Guided multi-tab workflow:** Sketch, Design brief, Configure & generate, Results & export, Project library, and System & limits.
+- **Local sketch processing:** EXIF orientation correction, minimum/maximum dimension checks, 1024 px maximum edge, cleanup profiles, and edge-map preview.
+- **Image diagnostics:** input/output dimensions, source format, file size, grayscale contrast, and approximate edge density.
+- **Categorized design goals:** form factor, usability, lifecycle/reliability, and practical engineering priorities.
+- **Separated engineering constraints:** must-have features, approximate dimensions/interfaces, and things to avoid.
+- **Prompt preview:** review the common prompt and distinct variant directions before calling the hosted model.
+- **Sketch-guided or prompt-only generation:** sketch-guided sends the prepared sketch to an image-to-image model; prompt-only uses the text brief only.
+- **Generate 1–3 design variants:** variants share the brief but explore a faithful refinement, alternative form, and material/interaction study. Each variant makes a separate hosted inference request.
+- **Side-by-side comparison sheet:** automatically generated contact sheet for reviewing the concepts together.
+- **Consolidated ZIP export:** includes generated concept images, per-variant briefs and metadata, sketch diagnostics when available, comparison sheet, and a manifest.
+- **Local project library:** previously saved runs can be refreshed and browsed from the app.
+- **Offline tests:** sketch processing, variant utilities, comparison-sheet creation, ZIP exports, and the UI output contract are tested without making a model request.
 
-## Run locally on Windows PowerShell
+## Run on Windows PowerShell
 
 ```powershell
 py -3.13 -m venv .venv
@@ -31,48 +31,42 @@ notepad .env
 python app/main.py
 ```
 
-Add your own Hugging Face token to `.env`; never commit `.env` or paste the token into source code. The token needs permission to use Inference Providers. The default `fal-ai` provider and hosted models may have quotas or charges depending on your account and current provider terms.
+If you already have a working `.env`, **do not replace it**. Add or update settings manually and preserve your private `HF_TOKEN`.
 
-The application opens at `http://127.0.0.1:7860` by default. The browser UI stays local. Do not set `GRADIO_SERVER_NAME=0.0.0.0` unless you intentionally need network access and understand the exposure.
+The app normally opens at `http://127.0.0.1:7860`. Keep it bound to localhost unless you intentionally understand and configure the network exposure. Do not commit `.env` or place your token in source code.
 
-## Environment variables
+## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `HF_TOKEN` | — | Hugging Face token with Inference Providers permission |
-| `HF_PROVIDER` | `fal-ai` | Inference provider |
+| `HF_PROVIDER` | `fal-ai` | Hosted inference provider |
 | `HF_EDIT_MODEL` | `black-forest-labs/FLUX.2-klein-9B` | Sketch-guided image-to-image model |
 | `HF_IMAGE_MODEL` | `black-forest-labs/FLUX.1-dev` | Prompt-only text-to-image model |
-| `PORT` | `7860` | Local application port |
+| `PORT` | `7860` | Local app port |
 | `GRADIO_SERVER_NAME` | `127.0.0.1` | Bind address; keep local by default |
 
-## Test processing without calling the AI provider
+Provider access, model support, rate limits, quotas, and potential charges depend on the current account and provider settings. Choose one variant when conserving requests. Generating three variants usually requires three separate inference calls.
+
+## Run tests without making AI requests
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-These tests only exercise local image preprocessing. They do not verify hosted model availability, cost, or generation quality.
+All tests in this suite are intended to run locally without the hosted model. They cannot guarantee that an external model or provider will be available at runtime.
 
-## How sketch processing works
+## How variants are generated
 
-1. Validate the file and reject empty, unreadable, oversized, or extremely small uploads.
-2. Respect EXIF orientation, convert to RGB, and downscale large inputs to a 1024 px longest edge.
-3. Apply one of three Pillow-based profiles: `Original`, `Clean sketch`, or `High-contrast linework`.
-4. Calculate a simple edge map and image-statistics report.
-5. For sketch-guided mode, send the processed sketch plus the prompt to the image-to-image model. Prompt-only fallback does not use the sketch to condition the generation.
-6. Save a ZIP bundle that contains the result and enough metadata to review how it was made.
+1. VisionForge validates and prepares the input sketch if one is provided.
+2. It builds a shared prompt from the project name, purpose, priorities, visualization style, and constraints.
+3. For each requested variant, it appends one exploration direction: **Reference-faithful refinement**, **Alternative form exploration**, or **Material and interaction study**.
+4. In sketch-guided mode the processed sketch is included in each image-to-image request. Prompt-only mode does not condition generation on the sketch.
+5. Successful variants are saved as their own run directories under `outputs/runs/`.
+6. A side-by-side sheet and combined ZIP are saved under `outputs/exports/`.
 
-The edge map is for inspection; it is not a CAD trace or a substitute for geometry extraction. The image model may change dimensions, invent controls or ports, or misunderstand the drawing.
+The directions are prompt guidance, not hard guarantees. A model can omit or invent features, change proportions, or fail to follow constraints. Compare each render manually with the sketch and written brief.
 
-## Engineering and safety limitations
+## Engineering limitations
 
-AI outputs are **visual concepts only**. They are not validated CAD, an electrical schematic, verified dimensions, a bill of materials, a safety assessment, or manufacturing-ready documentation. Review the actual design independently before making technical decisions.
-
-## Suggested next improvements
-
-- Multi-variant generation with consistent prompt/settings records.
-- Side-by-side original / processed / output comparison with synchronized zoom.
-- User-adjustable target aspect ratio and image-to-image strength, once supported reliably by the selected provider.
-- Optional structured design report with a human verification checklist.
-- A deployed demo with a carefully managed secret and request limits.
+VisionForge creates **visual concepts only**. Generated images are not validated CAD, circuit schematics, verified dimensions, thermal or electrical analysis, a bill of materials, a safety assessment, or manufacturing instructions. The edge map is a visual aid, not an extracted engineering drawing. Use proper CAD/EDA workflows and independent checks before making technical decisions.
