@@ -1,7 +1,16 @@
+# Python
 __pycache__/
 *.py[cod]
 .venv/
+**/.venv/
+
+# Secrets and local settings
 .env
 *.log
+
+# Gradio state/cache and generated files
 .gradio/
 outputs/
+
+# Accidental duplicate repository/virtual environment in this workspace
+visionforge-ai/
