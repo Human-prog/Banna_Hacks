@@ -7,6 +7,20 @@ import os
 import re
 import time
 import zipfile
+
+try:
+    from .variants import (
+        add_variant_direction,
+        create_comparison_sheet,
+        create_variant_bundle,
+    )
+except ImportError:
+    from variants import (
+        add_variant_direction,
+        create_comparison_sheet,
+        create_variant_bundle,
+    )
+
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -271,6 +285,7 @@ def generate_concept(
     generation_mode: str,
     profile: str,
     strength: float = 0.62,
+    variant_index: int | None = None,
 ) -> tuple[str | None, str, str, str | None, list[tuple[str, str]]]:
     """Generate through local Phi-4 Mini + local Stable Diffusion; no hosted API."""
     description = (description or "").strip()
@@ -292,6 +307,10 @@ def generate_concept(
     original_prompt = build_prompt(
         product_name, description, priorities, constraints or "", render_style, is_guided
     )
+    if variant_index is not None:
+        original_prompt, _variant_title = add_variant_direction(
+            original_prompt, variant_index
+        )
     prompt, reasoning_note = refine_prompt_with_ollama(original_prompt)
     seed = int(time.time_ns() % 2_147_483_647)
     actual_mode = "img2img" if is_guided else "txt2img"
@@ -437,28 +456,87 @@ def preview_prompt_ui(
 def generate_from_studio(
     sketch_path, name, description,
     form_factor, usability, lifecycle, engineering,
-    required, envelope, avoid, render_style, generation_mode, profile, image_strength,
+    required, envelope, avoid, render_style, generation_mode, profile,
+    image_strength, variant_count=2,
 ):
-    """Adapt grouped UI controls to the local-only generation pipeline."""
-    result_image, status, brief, download_bundle, history = generate_concept(
-        sketch_path,
-        name,
-        description,
-        _selected_priorities(form_factor, usability, lifecycle, engineering),
-        _combine_constraints(required, envelope, avoid),
-        render_style,
-        generation_mode,
-        profile,
-        image_strength,
+    """Generate one to three local design variants and package the results."""
+    try:
+        count = int(variant_count)
+    except (TypeError, ValueError) as exc:
+        raise gr.Error("Choose one, two, or three variants.") from exc
+
+    if count not in (1, 2, 3):
+        raise gr.Error("Choose between one and three variants.")
+
+    priorities = _selected_priorities(
+        form_factor, usability, lifecycle, engineering
     )
+    constraints = _combine_constraints(
+        required or "", envelope or "", avoid or ""
+    )
+
+    image_paths = []
+    labels = []
+    briefs = []
+
+    for index in range(1, count + 1):
+        image, _single_status, brief, _single_bundle, _history = generate_concept(
+            sketch_path,
+            name,
+            description,
+            priorities,
+            constraints,
+            render_style,
+            generation_mode,
+            profile,
+            image_strength,
+            variant_index=index,
+        )
+
+        if not image:
+            raise gr.Error(f"Variant {index} did not produce an image.")
+
+        _prompt, label = add_variant_direction("Design brief", index)
+        image_paths.append(str(image))
+        labels.append(label)
+        briefs.append(f"## Variant {index}: {label}\n\n{brief}")
+
+    export_dir = OUTPUT_DIR / f"variant_export_{time.time_ns()}"
+    export_dir.mkdir(parents=True, exist_ok=False)
+
+    comparison_path = create_comparison_sheet(
+        image_paths,
+        labels,
+        export_dir / "comparison_sheet.png",
+    )
+    bundle_path = create_variant_bundle(
+        name or "VisionForge concept",
+        image_paths,
+        labels,
+        comparison_path,
+        export_dir / "visionforge_variants.zip",
+    )
+
+    status = (
+        f"### Generated {count} of {count} variants successfully\n\n"
+        "- **Image generation:** Local Stable Diffusion\n"
+        "- **Prompt refinement:** Local Ollama when available\n"
+        f"- **Design directions:** {', '.join(labels)}\n"
+        "- **Export:** Comparison sheet and ZIP bundle created\n\n"
+        "These images are exploratory visual concepts, not verified engineering designs."
+    )
+    short_status = f"Generated {count}/{count} variants locally."
+
     return (
-        result_image,
+        image_paths[0],
         status,
-        brief,
-        download_bundle,
-        history,
-        result_image,
-        status,
+        "\n\n---\n\n".join(briefs),
+        str(bundle_path),
+        load_history(),
+        image_paths[0],
+        short_status,
+        [(image, label) for image, label in zip(image_paths, labels)],
+        str(comparison_path),
     )
 
 try:
@@ -936,6 +1014,12 @@ These checks describe the image only; they do not judge whether the engineering 
                         minimum=0.25, maximum=0.90, value=0.62, step=0.05,
                         info="Used for local img2img mode. Higher values allow more change from the sketch.",
                     )
+                    variant_count = gr.Dropdown(
+                        label="Number of concept variants",
+                        choices=[1, 2, 3],
+                        value=2,
+                        info="Generate multiple design directions for comparison.",
+                    )
                     prompt_preview = gr.Textbox(
                         label="Prompt preview",
                         value="Complete the design brief to preview the prompt.",
@@ -955,7 +1039,18 @@ These checks describe the image only; they do not judge whether the engineering 
             with gr.Row(equal_height=False):
                 with gr.Column(scale=6, min_width=320):
                     result_image = gr.Image(label="Generated product concept", interactive=False, height=540)
-                    download_bundle = gr.File(label="Concept package (.zip)")
+                    download_bundle = gr.File(label="Concept variants package (.zip)")
+                    variant_gallery = gr.Gallery(
+                        label="Generated concept variants",
+                        columns=3,
+                        height=380,
+                        object_fit="contain",
+                    )
+                    comparison_sheet_image = gr.Image(
+                        label="Variant comparison sheet",
+                        interactive=False,
+                        height=350,
+                    )
                 with gr.Column(scale=5, min_width=300):
                     status = gr.Markdown("Generate a concept in **03 Ã‚Â· Configure & generate** to see its report here.")
                     with gr.Accordion("Concept brief and engineering review", open=True):
@@ -1085,9 +1180,14 @@ These checks describe the image only; they do not judge whether the engineering 
         fn=generate_from_studio,
         inputs=[
             sketch, name, description, form_factor, usability, lifecycle, engineering,
-            required, envelope, avoid, render_style, generation_mode, profile, image_strength,
+            required, envelope, avoid, render_style, generation_mode, profile,
+            image_strength, variant_count,
         ],
-        outputs=[result_image, status, brief, download_bundle, history, quick_preview, generation_status],
+        outputs=[
+            result_image, status, brief, download_bundle, history,
+            quick_preview, generation_status, variant_gallery,
+            comparison_sheet_image,
+        ],
     )
     engineering_check_button.click(
         fn=evaluate_engineering_design_ui,
