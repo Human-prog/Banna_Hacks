@@ -1,0 +1,9 @@
+# Dedicated worker environment only. Do NOT install these into the Gradio app's Python 3.13 venv.
+torch-directml==0.2.5.dev240914
+diffusers==0.30.3
+transformers==4.44.2
+accelerate==0.34.2
+safetensors>=0.4.5,<0.7
+huggingface_hub>=0.24.6,<1.0
+Pillow>=10.0,<13.0
+numpy>=1.23,<2.0
